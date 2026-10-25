@@ -1,0 +1,80 @@
+LinkSnap — local setup and verification
+
+Architecture: existing Next.js frontend + Express backend + existing pg dependency.
+PostgreSQL is now the source of truth. No new runtime/testing dependencies added.
+Use Node 24 (tested version recorded in performance-metrics.txt) and npm.
+
+1. Start your existing LOCAL PostgreSQL installation/container. Preserve volumes.
+   Existing backend/.env is retained. If setting up elsewhere, copy .env.example
+   to .env and fill DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD locally. Create the
+   database/user with your usual PostgreSQL administration tool if missing.
+2. In backend: npm ci; npm run db:migrate; npm start
+   Migration creates links and its creation-time index; does not delete rows.
+   HOST defaults to 127.0.0.1, PORT to 5000. CORS_ORIGINS is comma-separated and
+   defaults to http://localhost:3000. Startup fails safely if DB/schema is missing.
+3. In frontend: npm ci; npm run dev
+   NEXT_PUBLIC_API_URL in frontend/.env.local defaults to http://localhost:5000.
+   Restart/rebuild Next.js after changing its public environment configuration.
+4. In backend: npm test (HTTP boundary tests using a clearly labeled test double).
+   npm run test:integration (real PostgreSQL, isolated random schema).
+   npm run benchmark (real PostgreSQL + HTTP; never substitutes a fake database).
+5. In frontend: npm run lint; npm run build
+
+Integration and benchmark commands require a LOCAL DB user with CREATE SCHEMA.
+They create/drop only a freshly generated linksnap_test_*/linksnap_bench_* schema.
+They do not use public links or any existing records. If a hard interruption
+leaves a schema, inspect its name and contents before removing that exact schema.
+No tests drop databases, delete Docker volumes or import old localStorage links.
+
+API contract (errors always {"error":"human-readable message"}):
+POST /api/shorten {url, optional customAlias, optional title} -> 201 link object
+  {shortCode, originalUrl, title, createdAt, clicks}.
+  HTTP(S) only; no embedded credentials/control characters; max URL 4096, title
+  200; aliases 3–32 letters/numbers/_/-; case-sensitive; reserved names rejected.
+  Duplicate alias -> 409; generated-code collisions retry up to five times.
+GET /:shortCode -> 302 with no-store, or 404; HEAD does not count a click.
+GET /api/links/:shortCode -> link object or 404.
+GET /api/links?search=&sort=newest|oldest|clicks&limit=25&offset=0
+  -> {links,total,limit,offset}; limit 1–100; literal case-insensitive search.
+DELETE /api/links/:shortCode -> {deleted:true} or 404.
+GET /api/stats -> {totalLinks,totalClicks,topLink} for currently saved links.
+GET /api/health -> {status:"ok"}; checks DB and links schema, not just process.
+Malformed input -> 400; unsupported media -> 415; >16 KB payload -> 413;
+shortening limit -> 429 + Retry-After; common DB outages -> 503; unexpected -> 500.
+
+Important choices and limitations:
+- SQL parameters keep data separate from executable SQL. A primary key is the
+  final authority on alias uniqueness, including racing requests.
+- UPDATE clicks=clicks+1 is atomic. Counts are redirect decisions, not unique
+  humans or confirmed destination page loads; delivery failure can overcount.
+- No automatic expiry was present in the design; saved links remain until deleted.
+- Stats and link lists poll every 15 seconds and refresh on focus/create/delete.
+  Search/sort/pagination are server-side. An abort guard avoids stale searches.
+- The old browser-only history is not authoritative and is not auto-imported.
+  It cannot restore vanished in-memory mappings; create those links again.
+- Local single workspace, NO authentication/ownership isolation. Anyone with API
+  access can manage all links. Keep loopback default; add auth before public use.
+  CORS is a browser policy, not authentication. No private-network fetch occurs:
+  this server only returns redirects; it does not fetch destination URLs.
+- Per-process 60/minute/IP limiter resets on restart. Distributed limiting and
+  trusted proxy configuration need explicit design before public deployment.
+- Prepared migrations are intentionally small. Future schema alterations require
+  versioned migrations; CREATE TABLE IF NOT EXISTS is not an upgrade mechanism.
+- The unused Settings page/navigation was removed. Custom domains, API keys,
+  webhooks and geographic/referral/time-series analytics are out of scope.
+- Docker is not required for the API. Preserve any existing PostgreSQL setup.
+  Observed here: Docker Desktop's linksnap-db uses postgres:17 (server 17.11) and
+  a Docker volume mounted at /var/lib/postgresql/data. Existing port publication
+  is 0.0.0.0:5432; this task did not create or broaden that mapping. For local-only
+  operation, change it to 127.0.0.1:5432:5432 when intentionally recreating the
+  container with its SAME volume. No container/volume was recreated or deleted.
+
+Files:
+backend/app.js: HTTP validation, routes, errors, CORS, rate limit.
+backend/store.js: parameterized PostgreSQL queries; backend/db.js: bounded pool.
+backend/server.js: startup, binding, graceful shutdown; schema.sql/scripts/migrate.js:
+additive setup. test/: HTTP contract and real-DB persistence/concurrency coverage.
+scripts/benchmark*.js and isolated-db.js: repeatable paced measurement and cleanup.
+frontend/app/page.js/components: database-backed management/statistics, same layout.
+docs/audit.txt: original state; docs/test-results.txt: executed checks;
+docs/performance-metrics.txt and benchmark-results.json: method/results/raw samples.

@@ -1,0 +1,35 @@
+LinkSnap audit — 2026-10-24 (before implementation)
+
+Complete in code: responsive Next.js dashboard, clipboard actions, Express URL
+creation and 302 redirect for records held by the running process. Basic HTTP(S)
+validation exists. No Git repository/commit is available in this workspace.
+
+Partial: frontend sends titles/custom aliases but backend ignores them. Search
+and sort operate only on browser localStorage. Delete removes only the browser
+row (the redirect continues working). Statistics show zero clicks and misleading
+tracking/health labels. Analytics/settings screens are explicit placeholders.
+
+Missing: persistent URL storage, schema/migrations, link read/list/delete APIs,
+click counting, statistics API, automated tests, benchmarks, operational docs.
+db.js creates a PostgreSQL pool and probes it but server.js never imports it.
+Existing dependencies: express, cors, dotenv, pg; no testing framework.
+
+Reliability issues: non-string URLs can throw, missing request bodies can throw,
+malformed JSON uses Express default error output, unrestricted CORS, hardcoded
+port, Math.random codes, no bounded validation/rate limit/graceful shutdown.
+The in-memory object also inherits prototype keys. Links disappear on restart.
+
+Environment: Node v24.22.0, npm 11.19.1. Existing backend .env configures local
+PostgreSQL port 5432; read-only connection probe returned ECONNREFUSED. No Docker
+configuration or Docker executable on PATH was found. No existing volumes were touched.
+Frontend .env.local contains only the public API base configuration.
+
+Plan: preserve Next.js/Express/pg and UI components. Wire the intended PostgreSQL
+storage using parameterized SQL and an explicit additive migration. Use a unique
+schema for each integration/benchmark run, never truncate application tables.
+Use built-in node:test; separate HTTP boundary tests from real database tests.
+Complete alias/title support, persistent clicks, backend search/sort/pagination,
+safe errors and real health checks. No expiration design exists; do not invent
+one. Keep advanced settings out of scope and clearly marked unavailable.
+
+Runtime success is established by later test reports, not by this code audit.

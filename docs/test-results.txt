@@ -1,0 +1,66 @@
+LinkSnap final verification — 2026-10-24
+
+Current-source tests executed in this verification pass:
+
+1. Backend: npm test
+   Total 14; passed 12; failed 0; skipped 2; cancelled 0.
+   The two PostgreSQL-dependent cases are explicitly opt-in.
+
+2. Backend: npm run test:integration
+   Total 3; passed 3; failed 0; skipped 0; cancelled 0.
+   PostgreSQL 17.11 in the existing linksnap-db Docker container.
+
+3. Backend: $env:LINKSNAP_DB_TESTS='1'; npm test
+   Total 14; passed 14; failed 0; skipped 0; cancelled 0.
+   This is the combined run; the counts above overlap, not 29 unique tests.
+
+Coverage:
+- HTTP validation, URL schemes/credentials, JSON/media/payload limits, alias/title
+  bounds, 201 creation, 409 conflict, safe errors, CORS and rate limiting.
+- Parameterized PostgreSQL CRUD/search/sorting/pagination and real HTTP redirects.
+- 30 concurrent generated links: all unique, each redirects to its own destination.
+- 20 requests racing for one custom alias: exactly one 201 and nineteen 409s.
+- Forced generated-code collision against a committed DB row retries successfully.
+- 20 simultaneous redirects to one link produce exactly 20 recorded clicks.
+- HEAD and unknown links do not increment clicks; deletion returns subsequent 404s.
+- A fresh backend process retrieves data written by a previous exited process.
+- Real PostgreSQL health query succeeds; a real connection-refusal check returns
+  503 without stopping the user's database.
+- Benchmark nearest-rank percentiles checked against known values and empty data.
+
+4. Frontend: npm run lint — PASSED, exit 0, no diagnostics.
+5. Frontend: npm run build — PASSED, Next.js 16.4.2; / and /_not-found built.
+
+Settings removal: placeholder component, navigation entry, preview label and
+header entry removed. Overview, My Links and Analytics remain. No advanced
+settings features were added.
+
+Isolation: real-DB tests create/remove only fresh random schemas. The existing
+application schema contained zero links before and after functional tests; no
+application data or Docker volume was deleted. No temporary test schemas remained.
+This verifies backend-process persistence, not a PostgreSQL container restart.
+
+Interactive browser verification — PASSED on 2026-10-25 against the user's running
+frontend and backend. Created a disposable titled custom-alias link through the
+form; verified automatic table/count refresh, navigation to the correct external
+destination, exactly one recorded click, title search, oldest/newest row ordering,
+Most clicks selection, and Analytics totals. Deleted only the disposable link
+through the confirmation modal; the filtered table automatically became empty.
+Both the deleted redirect and record API returned 404. Original two links and
+their total of two clicks remained unchanged. No application code changes needed.
+Proof of cleanup: ui-verification.png. This supersedes the earlier browser timeout.
+Built HTML inspection passed: Overview, My Links and Analytics are present;
+Workspace Settings, its navigation entry and unfinished-feature copy are absent.
+
+Benchmark results are recorded separately in performance-metrics.txt and
+benchmark-results.json. Prior benchmark samples/report are archived in
+benchmarks/2026-10-24T12-06-55.454Z.json and .txt. No optimization claim is made.
+
+Final benchmark run: started 2026-10-24T12:33:23.724Z (18:03:23 IST).
+Completed all 18 scenarios (six endpoints at 1, 2 and 4 clients).
+4,276 measured requests; 4,276 successful; zero failures. Warm-up excluded.
+At four clients, redirects: p50 9.640 ms, p95 20.105 ms, p99 21.061 ms,
+81.039 successful requests/second under the paced workload.
+Benchmark schema cleanup succeeded. Final read-only inspection on 2026-10-25
+found no remaining test/benchmark schemas and two application links; these
+existing application records were preserved. No database volumes were changed.

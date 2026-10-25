@@ -1,0 +1,171 @@
+LinkSnap — performance-metrics.txt
+
+1. PROJECT AND ENVIRONMENT
+Status: MEASURED
+Started: 2026-10-25T10:07:27.905Z (UTC); display timezone Asia/Calcutta:
+25/10/2026, 3:37:27 pm IST
+Finished: 2026-10-25T10:09:37.470Z
+project: LinkSnap backend 1.0.0
+sourceSha256: 2e7dc78f1b0135d85bdea9f7e023ba020bc427f1deffede17b751925b77b3499
+gitCommit: Unavailable: no Git repository
+os: Windows_NT 10.0.26200 x64
+cpu: Intel(R) Core(TM) i5-8265U CPU @ 1.60GHz
+logicalCpus: 8
+totalRamGiB: 11.875236511230469
+freeRamGiB: 0.5482559204101562
+node: v24.22.0
+npm: 11.19.1
+database: PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+databaseLocation: Local PostgreSQL endpoint; deployment mode: docker (operator supplied; unknown if not configured)
+tool: LinkSnap paced HTTP runner v1 (Node built-in node:http)
+Setup failure: None
+Cleanup: Isolated schema removed
+Backend/load generator share the host. Database uses its local endpoint;
+record whether Docker/WSL/native before making comparisons. No secrets recorded.
+
+2. PERFORMANCE GOALS AND METRIC DEFINITIONS
+Correctness goal: 100% expected statuses AND validated bodies/redirect locations;
+zero timeouts. This is a target, not a result unless measured below.
+Initial exploratory latency goal: p95 < 100 ms at the configured paced load.
+Average = sum of latencies / sample count; p50 = median; p95/p99 = the latency at
+or below which 95%/99% of observed requests finish. Maximum is an outlier-sensitive
+observation, not a guaranteed bound. Units: milliseconds.
+RPS = completed attempts / elapsed measurement seconds, including drain/pacing.
+Successful RPS counts only responses passing status AND content checks.
+Error rate = all failed attempts / total; HTTP error rate counts >=400 responses;
+timeout rate counts requests exceeding the 3000 ms wall-clock deadline. Network
+and body validation failures are separate. Expected 302 redirects are successes.
+CPU = backend process CPU time / wall time * 100 (100% means one logical core).
+RSS = sampled peak resident backend memory, every 100 ms; short spikes may be missed.
+Database query round-trip includes pg pool acquisition, wire, execution and result
+decoding; it is NOT pure SQL execution time. All queries are instrumented, adding
+some overhead. Database CPU/RAM and pure SQL execution time: NOT MEASURED.
+Pool connections and waiting counts are sampled at query submission.
+
+3. BENCHMARK SCENARIOS
+POST /api/shorten; GET /:shortCode; GET /api/links/:shortCode;
+GET /api/links?limit=25&sort=newest; DELETE /api/links/:shortCode; GET /api/stats.
+Concurrency sequence: 1, 2, 4; per-client ceiling 25 RPS.
+Warm-up: 2s; measured phase: 5s per endpoint/load level.
+Pipelining: none; HTTP/1.1 keep-alive; redirects are never followed externally.
+Seed: 100 links with realistic example.com article URLs/titles.
+Create grows from 100 rows. Delete starts with max(100, ceil(duration * clients *
+perClientRps) + 2 * clients) rows so each deletion targets a different valid row.
+Read/redirect/list/analytics use 100 rows. The default is at most 4 clients and
+100 attempted RPS. Limits reject higher load: review workload before changing code.
+
+4. METHODOLOGY AND REPRODUCTION
+From F:\Aastha\url_shortner\backend:
+  npm ci
+  npm test
+  npm run test:integration
+  npm run benchmark
+Exact PowerShell configuration for this run:
+  $env:BENCH_DB_MODE='docker'
+  $env:BENCH_CONCURRENCY='1,2,4'
+  $env:BENCH_WARMUP='2'
+  $env:BENCH_DURATION='5'
+  $env:BENCH_CLIENT_RPS='25'
+  npm run benchmark
+Uses existing backend/.env DB_* values, never prints them. PostgreSQL must be
+local, available and allow CREATE SCHEMA. No running frontend/API is necessary.
+The harness creates a fresh linksnap_bench_<random> schema, applies schema.sql,
+forks the actual Express/pg backend on an ephemeral loopback port and runs HTTP
+from a separate process. Only this isolated backend disables the create limiter.
+The ordinary server retains its 60 requests/minute/IP limit.
+Each warm-up and measured phase reseeds the isolated table, making initial data
+scale repeatable. Warm-up samples are discarded. Database/OS caches remain warm;
+fresh client connections at measurement start are included in measured latency.
+Each worker sends one request at a time, then waits to respect its per-client
+rate ceiling. Slow replies reduce offered load: this is a paced closed-loop test,
+not an open-loop saturation test, and is subject to coordinated omission.
+Latencies use performance.now() from immediately before request construction to
+body completion and validation. Percentiles use sorted samples and nearest rank
+ceil(p*N). Aggregate and successful-only latency summaries plus every request
+sample are saved in docs/benchmark-results.json. All attempts are retained.
+Warm-up failure aborts measurement. Measured failure stops increased load and
+retains partial results. Schema cleanup runs in finally. Ctrl+C/hard crashes can
+leave an isolated schema; inspect it before explicitly dropping that schema.
+Never drop public, truncate application tables, or delete database volumes.
+
+Primary tool: the bundled Node.js paced HTTP runner (no extra install). Its small
+implementation handles unique create/delete records and checks response content,
+which makes this initial correctness-focused workload easy to repeat. It is not
+a calibrated capacity-testing product. Autocannon is a simpler ready-made choice
+for a conventional Node HTTP load test; JMeter can send HTTP requests to this
+Node/Express API and does not require a Java backend. JMeter is useful for richer
+GUI test plans, but adds a Java toolchain for overlapping initial measurements.
+References: https://github.com/mcollina/autocannon
+https://jmeter.apache.org/usermanual/build-web-test-plan.html
+
+5. RESULTS (ms; no invented values)
+Method endpoint | clients | total | success | failed | error% | avg | p50 | p95 | p99 | max | RPS | success RPS
+POST /api/shorten | 1 | 107 | 107 | 0 | 0.000 | 24.609 | 21.433 | 43.304 | 59.655 | 144.448 | 21.315 | 21.315
+GET /:shortCode | 1 | 109 | 109 | 0 | 0.000 | 7.997 | 7.483 | 11.378 | 39.744 | 42.361 | 21.594 | 21.594
+GET /api/links/:shortCode | 1 | 109 | 109 | 0 | 0.000 | 7.742 | 8.816 | 10.450 | 14.381 | 14.767 | 21.671 | 21.671
+GET /api/links?limit=25&sort=newest | 1 | 107 | 107 | 0 | 0.000 | 11.659 | 11.161 | 16.774 | 19.389 | 20.151 | 21.394 | 21.394
+DELETE /api/links/:shortCode | 1 | 107 | 107 | 0 | 0.000 | 8.611 | 7.782 | 13.770 | 16.077 | 18.574 | 21.289 | 21.289
+GET /api/stats | 1 | 105 | 105 | 0 | 0.000 | 7.761 | 6.720 | 12.393 | 13.195 | 13.326 | 20.826 | 20.826
+POST /api/shorten | 2 | 218 | 218 | 0 | 0.000 | 12.725 | 13.153 | 17.832 | 23.386 | 27.030 | 43.196 | 43.196
+GET /:shortCode | 2 | 220 | 220 | 0 | 0.000 | 8.693 | 8.055 | 13.581 | 15.990 | 22.039 | 43.926 | 43.926
+GET /api/links/:shortCode | 2 | 210 | 210 | 0 | 0.000 | 5.683 | 5.285 | 9.480 | 11.280 | 21.629 | 41.962 | 41.962
+GET /api/links?limit=25&sort=newest | 2 | 217 | 217 | 0 | 0.000 | 12.062 | 10.516 | 19.355 | 22.162 | 34.654 | 43.096 | 43.096
+DELETE /api/links/:shortCode | 2 | 211 | 211 | 0 | 0.000 | 13.411 | 11.128 | 27.270 | 63.795 | 80.544 | 42.075 | 42.075
+GET /api/stats | 2 | 217 | 217 | 0 | 0.000 | 10.182 | 9.040 | 17.792 | 22.975 | 28.424 | 43.294 | 43.294
+POST /api/shorten | 4 | 422 | 422 | 0 | 0.000 | 16.884 | 16.586 | 23.950 | 56.332 | 75.183 | 83.775 | 83.775
+GET /:shortCode | 4 | 437 | 437 | 0 | 0.000 | 26.853 | 25.514 | 47.803 | 76.287 | 85.061 | 87.154 | 87.154
+GET /api/links/:shortCode | 4 | 444 | 444 | 0 | 0.000 | 9.221 | 7.776 | 18.050 | 41.537 | 72.869 | 88.481 | 88.481
+GET /api/links?limit=25&sort=newest | 4 | 434 | 434 | 0 | 0.000 | 13.944 | 12.404 | 24.468 | 35.847 | 70.088 | 86.358 | 86.358
+DELETE /api/links/:shortCode | 4 | 374 | 374 | 0 | 0.000 | 35.934 | 25.123 | 97.193 | 174.949 | 331.114 | 74.005 | 74.005
+GET /api/stats | 4 | 444 | 444 | 0 | 0.000 | 13.732 | 13.694 | 22.601 | 27.427 | 32.323 | 88.411 | 88.411
+
+Resources and failure detail, per endpoint/load level:
+create c=1: CPU(one core)=9.977%; peak RSS=69.453 MiB; pool max=1, waiting max=1; pg round trips=107, avg=21.633 ms, p95=40.539 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+redirect c=1: CPU(one core)=5.565%; peak RSS=69.426 MiB; pool max=1, waiting max=1; pg round trips=109, avg=6.131 ms, p95=7.993 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+retrieve c=1: CPU(one core)=7.753%; peak RSS=64.141 MiB; pool max=1, waiting max=1; pg round trips=109, avg=4.538 ms, p95=6.123 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+list c=1: CPU(one core)=9.055%; peak RSS=64.723 MiB; pool max=1, waiting max=1; pg round trips=214, avg=4.307 ms, p95=6.882 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+delete c=1: CPU(one core)=5.907%; peak RSS=65.309 MiB; pool max=1, waiting max=1; pg round trips=107, avg=6.336 ms, p95=10.165 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+analytics c=1: CPU(one core)=6.504%; peak RSS=61.789 MiB; pool max=1, waiting max=1; pg round trips=210, avg=2.922 ms, p95=4.914 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+create c=2: CPU(one core)=17.947%; peak RSS=63.172 MiB; pool max=2, waiting max=1; pg round trips=218, avg=9.349 ms, p95=13.338 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+redirect c=2: CPU(one core)=7.506%; peak RSS=64.262 MiB; pool max=2, waiting max=1; pg round trips=220, avg=6.945 ms, p95=10.621 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+retrieve c=2: CPU(one core)=8.431%; peak RSS=64.379 MiB; pool max=2, waiting max=1; pg round trips=210, avg=3.375 ms, p95=5.735 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+list c=2: CPU(one core)=18.923%; peak RSS=65.254 MiB; pool max=2, waiting max=1; pg round trips=434, avg=4.604 ms, p95=7.916 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+delete c=2: CPU(one core)=10.606%; peak RSS=65.004 MiB; pool max=2, waiting max=1; pg round trips=211, avg=10.995 ms, p95=25.310 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+analytics c=2: CPU(one core)=8.416%; peak RSS=65.059 MiB; pool max=2, waiting max=1; pg round trips=434, avg=3.966 ms, p95=6.831 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+create c=4: CPU(one core)=22.628%; peak RSS=66.469 MiB; pool max=4, waiting max=1; pg round trips=422, avg=12.781 ms, p95=18.467 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+redirect c=4: CPU(one core)=21.175%; peak RSS=66.445 MiB; pool max=4, waiting max=1; pg round trips=437, avg=23.980 ms, p95=43.939 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+retrieve c=4: CPU(one core)=17.153%; peak RSS=67.098 MiB; pool max=4, waiting max=1; pg round trips=444, avg=5.736 ms, p95=11.547 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+list c=4: CPU(one core)=30.437%; peak RSS=68.664 MiB; pool max=4, waiting max=1; pg round trips=868, avg=5.304 ms, p95=9.957 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+delete c=4: CPU(one core)=15.744%; peak RSS=68.613 MiB; pool max=4, waiting max=1; pg round trips=374, avg=31.407 ms, p95=93.562 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+analytics c=4: CPU(one core)=29.223%; peak RSS=68.527 MiB; pool max=4, waiting max=1; pg round trips=888, avg=5.362 ms, p95=9.207 ms; failures={"http":0,"timeout":0,"network":0,"validation":0}; HTTP error%=0.000, timeout%=0.000
+
+6. BASELINE AND COMPARISON
+This is a persistent-backend verification run, not a before/after optimization.
+No percentage improvement is claimed. The former in-memory prototype is not a
+comparable baseline. Before optimizing, archive JSON/text results. Repeat with
+the same machine, DB deployment/config, source/instrumentation, seed scale,
+request mix, pacing, concurrency, warm-up and duration. Repeat multiple runs and
+report variation before claiming improvement. Do not compare different loads as
+an optimization. This run uses one isolated endpoint at a time, not mixed traffic.
+
+7. INTERPRETATION AND LIMITATIONS
+Local development data, small datasets, one run per scenario and short duration
+do not establish production scalability, high availability or traffic capacity.
+The load generator competes with the backend and database for local resources.
+Desktop background load is not quantified. Run benchmarks separately from builds,
+tests and filesystem scans, and repeat on an otherwise idle machine before comparisons.
+Paced throughput near its ceiling demonstrates handling this offered load, not
+maximum RPS. No production deployment, multi-user auth, expiry, unique visitor,
+geography or historical event analytics exists. Counts mean committed redirect
+decisions, including bots/repeated visits; delivery/destination success cannot be
+guaranteed after a network disconnect. HEAD/unknown links do not increment.
+Deleting a link removes its count from aggregate statistics. SQL list/count and
+stats/top reads can observe different instants during concurrent mutations.
+No database restart durability test is implied by the backend process restart
+test. PostgreSQL storage/volume configuration determines durability across DB
+restarts. Current schema migration is additive and creates no database itself.
+
+8. CV METRICS — VERIFIED RESULTS ONLY
+- Measured redirect p95 latency of 47.803 ms with 4 concurrent clients in a 5.01-second local PostgreSQL-backed benchmark.
+- Handled 87.154 successful redirects/second at a paced offered-load ceiling of 100 RPS (not a maximum-capacity result).
+- Validated 100.000% request success across 4492 measured requests spanning six backend endpoints and the configured load levels.
